@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM Web Translator 设置</title>
+    <link rel="stylesheet" href="../styles/options.css">
+  </head>
+  <body>
+    <main class="options">
+      <h1>LLM Web Translator 设置</h1>
+
+      <form id="settingsForm">
+        <section class="field">
+          <span>服务商</span>
+          <input id="provider" name="provider" type="hidden" required>
+          <div class="provider-tabs" id="providerTabs" role="tablist" aria-label="服务商">
+            <button type="button" class="provider-tab" data-provider="openai" role="tab">OpenAI</button>
+            <button type="button" class="provider-tab" data-provider="deepseek" role="tab">DeepSeek</button>
+            <button type="button" class="provider-tab" data-provider="openrouter" role="tab">OpenRouter</button>
+            <button type="button" class="provider-tab" data-provider="minimax" role="tab">MiniMax</button>
+            <button type="button" class="provider-tab" data-provider="dashscope" role="tab">DashScope</button>
+          </div>
+          <small id="providerHint"></small>
+        </section>
+
+        <label>
+          <span>API Key</span>
+          <input id="apiKey" name="apiKey" type="password" autocomplete="off" required>
+        </label>
+
+        <label>
+          <span>模型</span>
+          <input id="model" name="model" type="text" placeholder="gpt-4o-mini" required>
+        </label>
+
+        <section class="field">
+          <span>目标语言</span>
+          <input id="targetLanguage" name="targetLanguage" type="hidden" required>
+          <div class="language-tabs" id="languageTabs" role="tablist" aria-label="目标语言">
+            <button type="button" class="language-tab" data-language="简体中文" role="tab">简中</button>
+            <button type="button" class="language-tab" data-language="繁體中文" role="tab">繁中</button>
+            <button type="button" class="language-tab" data-language="English" role="tab">English</button>
+            <button type="button" class="language-tab" data-language="日本語" role="tab">日本語</button>
+            <button type="button" class="language-tab" data-language="한국어" role="tab">한국어</button>
+          </div>
+          <input id="customTargetLanguage" type="text" placeholder="自定义目标语言，例如 Français">
+        </section>
+
+        <label>
+          <span>并发线程数</span>
+          <input id="concurrency" name="concurrency" type="number" min="1" max="12" step="1" required>
+          <small>控制同时翻译的段落数量。默认 4；网络或接口限流时调低，电脑和服务商额度充足时可调高。</small>
+        </label>
+
+        <label class="toggle-field">
+          <input id="bilingualMode" name="bilingualMode" type="checkbox">
+          <span>
+            <strong>双语对照模式</strong>
+            <small>开启后保留原文，并在原文后显示翻译结果。当前功能正在实验中。</small>
+          </span>
+        </label>
+
+        <div class="actions">
+          <button type="submit">保存设置</button>
+          <button id="openShortcuts" type="button" class="secondary">自定义快捷键</button>
+          <span id="saveStatus" role="status"></span>
+        </div>
+      </form>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+</html>

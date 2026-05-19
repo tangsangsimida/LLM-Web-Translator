@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM Web Translator</title>
+    <link rel="stylesheet" href="../styles/popup.css">
+  </head>
+  <body>
+    <main class="popup">
+      <header>
+        <h1>网页翻译</h1>
+        <button id="openOptions" class="icon-button" title="设置" aria-label="设置">⚙</button>
+      </header>
+
+      <section class="quick-settings" aria-label="快捷设置">
+        <label>
+          <span>目标语言</span>
+          <select id="targetLanguage">
+            <option value="简体中文">简体中文</option>
+            <option value="繁體中文">繁體中文</option>
+            <option value="English">English</option>
+            <option value="日本語">日本語</option>
+            <option value="한국어">한국어</option>
+          </select>
+        </label>
+        <label>
+          <span>并发</span>
+          <input id="concurrency" type="number" min="1" max="12" step="1">
+        </label>
+      </section>
+
+      <section class="status" id="status">准备翻译当前网页</section>
+
+      <div class="actions">
+        <button id="translate" class="primary">翻译当前页</button>
+        <button id="restore">恢复原文</button>
+      </div>
+
+      <section class="text-tool" aria-label="文本翻译">
+        <label>
+          <span>文本翻译</span>
+          <textarea id="sourceText" rows="4" placeholder="输入要翻译的文本"></textarea>
+        </label>
+        <button id="translateText" class="primary subtle">翻译文本</button>
+        <output id="translatedText" class="translation-output"></output>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

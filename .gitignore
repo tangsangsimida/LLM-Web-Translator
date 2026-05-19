@@ -1,0 +1,23 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Build outputs
+dist/
+build/
+release/
+*.zip
