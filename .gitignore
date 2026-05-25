@@ -5,6 +5,7 @@ Thumbs.db
 # Editors
 .vscode/
 .idea/
+AGENTS.md
 
 # Logs
 *.log

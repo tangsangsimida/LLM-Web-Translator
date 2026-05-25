@@ -53,6 +53,7 @@ const PROVIDER_STRATEGIES = {
 };
 
 const CONTEXT_MENU_TRANSLATE_SELECTION = "llm-web-translator-translate-selection";
+const CONTEXT_MENU_RESTORE_SELECTION = "llm-web-translator-restore-selection";
 
 chrome.runtime.onInstalled.addListener(async () => {
   const settings = await chrome.storage.sync.get(DEFAULT_SETTINGS);
@@ -73,7 +74,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== CONTEXT_MENU_TRANSLATE_SELECTION) {
+  if (![CONTEXT_MENU_TRANSLATE_SELECTION, CONTEXT_MENU_RESTORE_SELECTION].includes(info.menuItemId)) {
     return;
   }
 
@@ -84,11 +85,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   await setBadge(tab.id, "...");
 
   try {
-    await sendMessageToTab(tab.id, {
-      type: "TRANSLATE_SELECTION",
-      selectedText: info.selectionText || ""
-    });
-    await setBadge(tab.id, "OK");
+    if (info.menuItemId === CONTEXT_MENU_RESTORE_SELECTION) {
+      const response = await sendMessageToTab(tab.id, { type: "RESTORE_SELECTION" });
+      await setBadge(tab.id, response?.restored > 0 ? "原" : "0");
+    } else {
+      await sendMessageToTab(tab.id, {
+        type: "TRANSLATE_SELECTION",
+        selectedText: info.selectionText || ""
+      });
+      await setBadge(tab.id, "OK");
+    }
   } catch (error) {
     console.error("LLM Web Translator selection failed:", error);
     await setBadge(tab.id, "ERR");
@@ -116,6 +122,11 @@ function createContextMenus() {
     chrome.contextMenus.create({
       id: CONTEXT_MENU_TRANSLATE_SELECTION,
       title: "翻译选中内容",
+      contexts: ["selection"]
+    });
+    chrome.contextMenus.create({
+      id: CONTEXT_MENU_RESTORE_SELECTION,
+      title: "还原选中翻译",
       contexts: ["selection"]
     });
   });

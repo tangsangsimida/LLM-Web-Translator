@@ -18,6 +18,7 @@
     bilingualTranslations: new Map(),
     spinners: new Map(),
     originalPositions: new Map(),
+    translationCache: new Map(),
     active: false
   };
 
@@ -36,6 +37,7 @@
     "SVG",
     "CANVAS"
   ]);
+  const SKIP_TAG_SELECTOR = [...SKIP_TAGS].map((tagName) => tagName.toLowerCase()).join(",");
 
   const BLOCK_SELECTOR = [
     "p",
@@ -92,6 +94,12 @@
       return false;
     }
 
+    if (message?.type === "RESTORE_SELECTION") {
+      const restored = restoreSelection();
+      sendResponse({ ok: true, restored });
+      return false;
+    }
+
     return false;
   });
 
@@ -115,6 +123,10 @@
     }
 
     const range = selection.getRangeAt(0);
+    if (isInsideSkippedElement(getClosestElement(range.commonAncestorContainer))) {
+      throw new Error("代码块、表单和不可翻译区域不会被翻译。");
+    }
+
     const text = selectedText?.trim() || selection.toString().trim();
     if (!text) {
       throw new Error("选中的内容为空。");
@@ -126,21 +138,12 @@
     }
 
     try {
-      const response = await chrome.runtime.sendMessage({
-        type: "TRANSLATE_BATCH",
-        texts: [text]
-      });
-
-      if (!response?.ok) {
-        throw new Error(response?.error || "Translation failed.");
-      }
-
-      const translation = response.translations?.[0];
+      const settings = await getTranslationSettings();
+      const [translation] = await translateTextsWithCache([text], settings);
       if (typeof translation !== "string" || !translation.trim()) {
         throw new Error("模型没有返回可用译文。");
       }
 
-      const settings = await getTranslationSettings();
       const span = document.createElement("span");
       span.className = `${SELECTION_CLASS} notranslate`;
       span.dataset.originalText = text;
@@ -153,10 +156,15 @@
         const insertionRange = range.cloneRange();
         insertionRange.collapse(false);
         insertionRange.insertNode(span);
-      } else {
+      } else if (canReplaceSelectionRange(range)) {
         span.textContent = translation.trim();
         range.deleteContents();
         range.insertNode(span);
+      } else {
+        span.classList.add(BILINGUAL_CLASS);
+        span.dataset.detached = "true";
+        span.textContent = translation.trim();
+        insertDetachedSelectionTranslation(range, container, span);
       }
 
       selection.removeAllRanges();
@@ -174,7 +182,7 @@
     clearSpinners();
     injectSpinnerStyle();
     if (hasTranslatedContent()) {
-      restoreOriginals();
+      return { translated: 0, failed: 0, skipped: 0, total: 0, reused: true };
     }
 
     const settings = await getTranslationSettings();
@@ -204,10 +212,12 @@
   async function getTranslationSettings() {
     const settings = await chrome.storage.sync.get({
       concurrency: DEFAULT_CONCURRENT_SEGMENTS,
+      targetLanguage: "简体中文",
       bilingualMode: false
     });
     return {
       concurrency: clampNumber(settings.concurrency, MIN_CONCURRENT_SEGMENTS, MAX_CONCURRENT_SEGMENTS, DEFAULT_CONCURRENT_SEGMENTS),
+      targetLanguage: settings.targetLanguage || "简体中文",
       bilingualMode: Boolean(settings.bilingualMode)
     };
   }
@@ -239,6 +249,56 @@
     }
 
     return container.closest(BLOCK_SELECTOR) || container;
+  }
+
+  function canReplaceSelectionRange(range) {
+    if (range.startContainer !== range.endContainer || range.startContainer.nodeType !== Node.TEXT_NODE) {
+      return false;
+    }
+
+    const parent = range.startContainer.parentElement;
+    return Boolean(parent && !parent.closest("table, thead, tbody, tfoot, tr, td, th"));
+  }
+
+  function insertDetachedSelectionTranslation(range, container, node) {
+    const target = getDetachedSelectionTarget(range, container);
+    if (!target?.isConnected) {
+      const insertionRange = range.cloneRange();
+      insertionRange.collapse(false);
+      insertionRange.insertNode(node);
+      return;
+    }
+
+    if (canAppendBilingualBlock(target)) {
+      target.appendChild(node);
+      return;
+    }
+
+    target.parentNode.insertBefore(node, target.nextSibling);
+  }
+
+  function getDetachedSelectionTarget(range, container) {
+    const rawTarget = container?.closest(BLOCK_SELECTOR) || getRangeContainer(range);
+    if (!rawTarget) {
+      return null;
+    }
+
+    const tablePart = rawTarget.closest("table, thead, tbody, tfoot, tr");
+    if (!tablePart) {
+      return rawTarget;
+    }
+
+    const startCell = getClosestElement(range.startContainer)?.closest("td, th");
+    const endCell = getClosestElement(range.endContainer)?.closest("td, th");
+    if (startCell && startCell === endCell) {
+      return startCell;
+    }
+
+    return tablePart.closest("table") || tablePart;
+  }
+
+  function getClosestElement(node) {
+    return node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
   }
 
   async function runSegmentWorker(queue, result, settings) {
@@ -291,16 +351,9 @@
 
     for (const batch of batches) {
       const texts = batch.map((node) => node.nodeValue.trim());
-      const response = await chrome.runtime.sendMessage({
-        type: "TRANSLATE_BATCH",
-        texts
-      });
+      const translations = await translateTextsWithCache(texts, settings);
 
-      if (!response?.ok) {
-        throw new Error(response?.error || "Translation failed.");
-      }
-
-      response.translations.forEach((translation, index) => {
+      translations.forEach((translation, index) => {
         const node = batch[index];
         if (!node?.isConnected || typeof translation !== "string") {
           return;
@@ -327,16 +380,9 @@
 
     for (const batch of createNodeBatches(nodes)) {
       const texts = batch.map((node) => node.nodeValue.trim());
-      const response = await chrome.runtime.sendMessage({
-        type: "TRANSLATE_BATCH",
-        texts
-      });
+      const batchTranslations = await translateTextsWithCache(texts, settings);
 
-      if (!response?.ok) {
-        throw new Error(response?.error || "Translation failed.");
-      }
-
-      response.translations.forEach((translation) => {
+      batchTranslations.forEach((translation) => {
         if (typeof translation === "string" && translation.trim()) {
           translations.push(translation.trim());
         }
@@ -349,6 +395,53 @@
 
     insertBilingualBlock(segment.element, translations.join(" "));
     return 1;
+  }
+
+  async function translateTextsWithCache(texts, settings) {
+    const translations = new Array(texts.length);
+    const misses = [];
+
+    texts.forEach((text, index) => {
+      const cacheKey = getCacheKey(text, settings);
+      if (TRANSLATOR_STATE.translationCache.has(cacheKey)) {
+        translations[index] = TRANSLATOR_STATE.translationCache.get(cacheKey);
+      } else {
+        misses.push({ text, index, cacheKey });
+      }
+    });
+
+    if (misses.length === 0) {
+      return translations;
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      type: "TRANSLATE_BATCH",
+      texts: misses.map((item) => item.text)
+    });
+
+    if (!response?.ok) {
+      throw new Error(response?.error || "Translation failed.");
+    }
+
+    misses.forEach((item, responseIndex) => {
+      const translation = response.translations?.[responseIndex];
+      if (typeof translation === "string" && translation.trim()) {
+        TRANSLATOR_STATE.translationCache.set(item.cacheKey, translation);
+        translations[item.index] = translation;
+      } else {
+        translations[item.index] = item.text;
+      }
+    });
+
+    return translations;
+  }
+
+  function getCacheKey(text, settings) {
+    return JSON.stringify({
+      targetLanguage: settings.targetLanguage,
+      bilingualMode: settings.bilingualMode,
+      text
+    });
   }
 
   function collectSegments(root) {
@@ -443,7 +536,7 @@
   function findNearestVisibleContainer(element) {
     let current = element;
     while (current && current !== document.body) {
-      if (SKIP_TAGS.has(current.tagName) || current.closest(`.${SPINNER_CLASS}, .notranslate`)) {
+      if (isInsideSkippedElement(current) || current.closest(`.${SPINNER_CLASS}, .notranslate`)) {
         return null;
       }
 
@@ -459,7 +552,7 @@
 
   function isTranslatableNode(node) {
     const parent = node.parentElement;
-    if (!parent || SKIP_TAGS.has(parent.tagName)) {
+    if (!parent || isInsideSkippedElement(parent)) {
       return false;
     }
 
@@ -477,6 +570,10 @@
     }
 
     return isVisibleElement(parent);
+  }
+
+  function isInsideSkippedElement(element) {
+    return Boolean(element?.closest(SKIP_TAG_SELECTOR));
   }
 
   function isVisibleElement(element) {
@@ -514,6 +611,10 @@
 
   function showSpinner(element) {
     if (TRANSLATOR_STATE.spinners.has(element) || !element.isConnected) {
+      return;
+    }
+
+    if (element.matches?.("table, thead, tbody, tfoot, tr")) {
       return;
     }
 
@@ -580,10 +681,34 @@
 
       .${BILINGUAL_CLASS} {
         display: block;
+        box-sizing: border-box;
+        max-width: 100%;
         color: #1554d1;
         background: rgba(36, 107, 254, 0.08);
         border-left: 3px solid #246bfe;
         border-radius: 3px;
+        margin: 0.35em 0 0.55em;
+        padding: 0.45em 0.65em;
+        line-height: 1.65;
+        overflow-wrap: anywhere;
+      }
+
+      .${BILINGUAL_CLASS}[data-placement="cell"] {
+        margin: 0.35em 0 0;
+        padding: 0.3em 0.45em;
+      }
+
+      .${SELECTION_CLASS}.${BILINGUAL_CLASS} {
+        display: inline;
+        border-left: 0;
+        margin: 0 0.25em;
+        padding: 0.08em 0.25em;
+        line-height: inherit;
+      }
+
+      .${SELECTION_CLASS}.${BILINGUAL_CLASS}[data-detached="true"] {
+        display: block;
+        border-left: 3px solid #246bfe;
         margin: 0.35em 0 0.55em;
         padding: 0.45em 0.65em;
         line-height: 1.65;
@@ -614,9 +739,10 @@
       existing.remove();
     }
 
-    const block = document.createElement("span");
+    const block = document.createElement(canUseBlockBilingualElement(element) ? "div" : "span");
     block.className = `${BILINGUAL_CLASS} notranslate`;
     block.setAttribute("translate", "no");
+    block.dataset.placement = isTableCell(element) ? "cell" : "block";
     block.textContent = translation.trim();
 
     if (canAppendBilingualBlock(element)) {
@@ -630,6 +756,88 @@
 
   function canAppendBilingualBlock(element) {
     return ["LI", "TD", "TH", "DD", "DT", "SUMMARY"].includes(element.tagName);
+  }
+
+  function canUseBlockBilingualElement(element) {
+    return !["A", "BUTTON", "LABEL"].includes(element.tagName);
+  }
+
+  function isTableCell(element) {
+    return ["TD", "TH"].includes(element.tagName);
+  }
+
+  function restoreSelection() {
+    clearSpinners();
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return 0;
+    }
+
+    const range = selection.getRangeAt(0);
+    let restored = 0;
+
+    document.querySelectorAll(`.${SELECTION_CLASS}, .${BILINGUAL_CLASS}`).forEach((node) => {
+      if (rangeIntersectsNode(range, node)) {
+        restored += restoreTranslationElement(node);
+      }
+    });
+
+    for (const [node, original] of [...TRANSLATOR_STATE.originals.entries()]) {
+      if (node.isConnected && rangeIntersectsNode(range, node)) {
+        node.nodeValue = original;
+        TRANSLATOR_STATE.originals.delete(node);
+        restored += 1;
+      }
+    }
+
+    if (restored === 0) {
+      const container = getRangeContainer(range);
+      const bilingual = container ? TRANSLATOR_STATE.bilingualTranslations.get(container) : null;
+      if (bilingual?.isConnected) {
+        bilingual.remove();
+        TRANSLATOR_STATE.bilingualTranslations.delete(container);
+        restored += 1;
+      }
+    }
+
+    selection.removeAllRanges();
+    TRANSLATOR_STATE.active = hasTranslatedContent();
+    return restored;
+  }
+
+  function restoreTranslationElement(node) {
+    if (!node?.isConnected) {
+      return 0;
+    }
+
+    if (
+      node.classList.contains(SELECTION_CLASS) &&
+      node.dataset.bilingual !== "true" &&
+      node.dataset.detached !== "true"
+    ) {
+      node.replaceWith(document.createTextNode(node.dataset.originalText || node.textContent || ""));
+      return 1;
+    }
+
+    node.remove();
+    for (const [element, bilingual] of [...TRANSLATOR_STATE.bilingualTranslations.entries()]) {
+      if (bilingual === node) {
+        TRANSLATOR_STATE.bilingualTranslations.delete(element);
+      }
+    }
+    return 1;
+  }
+
+  function rangeIntersectsNode(range, node) {
+    try {
+      return range.intersectsNode(node);
+    } catch {
+      const nodeRange = document.createRange();
+      nodeRange.selectNodeContents(node);
+      return range.compareBoundaryPoints(Range.START_TO_END, nodeRange) < 0 &&
+        range.compareBoundaryPoints(Range.END_TO_START, nodeRange) > 0;
+    }
   }
 
   function restoreOriginals() {

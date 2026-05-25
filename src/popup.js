@@ -69,7 +69,12 @@ translateTextButton.addEventListener("click", async () => {
       throw new Error(response?.error || "文本翻译失败。");
     }
 
-    translatedTextOutput.textContent = response.translations?.[0] || "";
+    const translation = response.translations?.[0];
+    if (typeof translation !== "string" || !translation.trim()) {
+      throw new Error("模型没有返回可用译文。");
+    }
+
+    translatedTextOutput.textContent = translation.trim();
     setStatus("文本翻译完成");
   } catch (error) {
     translatedTextOutput.textContent = error.message;
@@ -140,6 +145,10 @@ function setStatus(text) {
 }
 
 function formatTranslationStatus(response) {
+  if (response.reused) {
+    return "当前页面已有翻译结果";
+  }
+
   const parts = [`已翻译 ${response.translated ?? 0}/${response.total ?? 0} 段`];
   if (response.failed > 0) {
     parts.push(`${response.failed} 段失败`);
